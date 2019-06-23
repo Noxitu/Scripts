@@ -78,13 +78,17 @@ def parse_args(main, argv):
 #
 
 class Opener(urllib.request.FancyURLopener):
-    version = "Mozilla/5 "
+    version = "Mozilla/5.0 "
     TIMEOUT = 10
 
-    def __call__(self, url):
-        response = self.open(url)
+    def __call__(self, url, **kw):
+        log('    Requesting "{}" ...'.format(url))
+        response = self.open(url, **kw)
         try:
-            return response.read()
+            log('    Reading...')
+            ret = response.read()
+            log('    DONE')
+            return ret
         except:
             debug(response)
             raise
@@ -217,6 +221,18 @@ def estream(url, opener):
         yield 'ext', 'mp4'
         return
 
+@handler.create('mp4upload', R'^https://www.mp4upload.com/.*$')
+def mp4upload(url, opener, part = None):
+    id = re.match(R'^https://www.mp4upload.com/(?P<id>.*)$', url).group('id')
+    log('Found id:', id)
+    data = opener('https://www.mp4upload.com/embed-{}.html'.format(id))
+
+    m = find(data, Rb'\|mp4\|video\|([^|]+)\|282\|')
+    vid_id = m.group(1).decode('utf-8')
+    yield 'title', 'Mp4Upload-{}'.format(id)
+    yield 'url', 'https://s2.mp4upload.com:282/d/{}/video.mp4'.format(vid_id)
+    yield 'ext', 'mp4'
+
 @handler.create('vidstreaming', R'^https://vidstreaming.io/embed.php.*$')
 def vidstreaming(url, opener):
     data = opener(url)
@@ -240,6 +256,33 @@ def vidstreaming(url, opener):
                 yield key, value
             return
 
+@handler.create('GoGoAnime', R'^https://www.gogoanime1.com/watch/.*$')
+def gogoanime(url, opener, part = None):
+    query_title = Rb'<title>(?P<title>.*?)</title>'
+    query_url = Rb'data: { url: window.location.href, file:"(?P<url>.*?)"'
+    query_url2 = Rb'var file = "(?P<url>[^"]+)";'
+
+    data = opener(url)
+
+    m = find(data.replace(b'\n', b' '), query_title)
+    
+    title = m.group('title').decode('utf-8').strip()
+    title = title.split('English Subbed/Dubbed Full HD for Free')[0].strip()
+    yield 'title', title
+
+    def get_url():
+        try:
+            m = find(data, query_url)
+            return m.group('url').decode('utf-8').strip()
+        except NotFound:
+            pass
+
+        m = find(data, query_url2)
+        return m.group('url').decode('utf-8').strip()
+
+    yield 'url', get_url()
+
+    yield 'ext', 'mp4'
 
 @handler.create('AnimePlus.tv', R'^http://www\.animeplus\.tv/.*$')
 def animeplus(url, opener, part = None):
@@ -267,6 +310,37 @@ def animeplus(url, opener, part = None):
                 yield key, value
 
             return
+
+@handler.create('AnimeZone.pl', R'^https://www\.animezone\.pl/odcinek/.*$')
+def animezone(url, opener, part = None):
+    query_title = Rb'<title>(?P<title>.*?) - ogl..daj anime online</title>'
+
+    data = opener(url)
+    m = find(data, query_title)
+    yield 'title', m.group('title').decode('utf-8').strip()
+
+    buttons = re.findall(Rb'<td>(.*?)</td>.*?data-...="([^"]+)"', data.replace(b'\n', b' ').replace(b'\r', b' '))
+    log('Found buttons: ')
+    for btn in buttons:
+        log('    {}'.format(btn))
+
+    id = dict(buttons)[b'Mp4Upload.com']
+    data = opener(url, data=b'data='+id)
+    print(data)
+
+    '''part_no = 1
+    for src in iframes:
+        result = handler(src.decode('utf-8'), opener)
+
+        if 'url' in result:
+            if part is not None and part_no < int(part):
+                part_no += 1
+                continue
+
+            for key, value in result.items():
+                yield key, value
+
+            return'''
 
 @handler.create('GoGoAnime', R'^https://ww2.gogoanime.io/.*$')
 def gogoanime(url, opener):
@@ -351,7 +425,7 @@ def main(*urls, verbose: 'v' = False, part = None):
                 print('    {} = {}'.format(key, value))
 
             if {'title', 'url'} < video.keys():
-                title = video['title'].replace(':', ';').replace('/', ';')
+                title = video['title'].replace(':', ';').replace('/', ';').replace('?', ';')
 
                 if part is not None:
                     title += ' - Part ' + part
